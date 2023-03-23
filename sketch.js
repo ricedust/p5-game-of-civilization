@@ -4,7 +4,6 @@ let cameraAnimator;
 let board;
 let terrainGenerator;
 
-let simulationStartFrame = 0;
 let secondsInSimulation = 0;
 let simulationHasStarted = false;
 
@@ -19,7 +18,7 @@ function windowResized() {
 
 function setup() {
   createCanvas(windowWidth, windowHeight, WEBGL);
-  frameRate(10);
+  frameRate(24);
 
   setupBoard();
 
@@ -37,7 +36,7 @@ function setupBoard() {
 
   board = new Board(columns, rows);
 
-  terrainGenerator = new TerrainGenerator(board, 10, 0.1, 10, 0.5);
+  terrainGenerator = new TerrainGenerator(board, 5, 0.1, 10, 0.5);
   terrainGenerator.constructLevel(1);
 
   board.randomize();
@@ -47,13 +46,14 @@ function draw() {
   background(backgroundColor);
   
   if (simulationHasStarted) {
-    secondsInSimulation = (frameCount - simulationStartFrame) / frameRate();
+    
+    secondsInSimulation += deltaTime / 1000;
 
-    cameraAnimator.tiltBack(0, 3, height / 2, height * 2, 0.03);
+    cameraAnimator.tiltBack(0, 3, height, height * 2, 0.03);
     cameraAnimator.orbit(0.005);
 
-    if (secondsInSimulation < 10) {
-      terrainGenerator.constructLevel(floor(secondsInSimulation));
+    if (secondsInSimulation < 5) {
+      terrainGenerator.constructLevel(floor(secondsInSimulation) + 1);
     }
     else {
       board.determineNextGeneration();
@@ -70,12 +70,11 @@ function keyPressed() {
     if (keyCode == 32) { // Spacebar to start simulation
       perspective();
       simulationHasStarted = true;
-      simulationStartFrame = frameCount;
     }
     else if (keyCode == 82) { // R to randomize
       board.randomize();
     }
-    else if (keyCode == 67) {
+    else if (keyCode == 67) { // C to clear
       board.clear();
     }
   }
@@ -88,7 +87,7 @@ function mouseReleased() { !simulationHasStarted && BoardInput.mouseReleased(); 
 class TerrainGenerator {
   constructor(board, maxHeight, noiseScale, octaves, octaveFalloffFactor) {
     this.board = board;
-    this.height = maxHeight;
+    this.maxHeight = maxHeight;
     this.noiseScale = noiseScale;
     this.octaves = octaves;
     this.octaveFalloffFactor = octaveFalloffFactor;
@@ -102,7 +101,7 @@ class TerrainGenerator {
 
         if (!this.board.isCellOnEdge(x, y)) {
           let noiseValue = noise(x * this.noiseScale, y * this.noiseScale);
-          let terrainHeight = 1 + floor(noiseValue * this.height);
+          let terrainHeight = 1 + floor(noiseValue * this.maxHeight);
 
           this.board.getCell(x, y).terrainBlocks = constrain(terrainHeight, 1, level);
         }
@@ -120,9 +119,10 @@ class Cell {
     this.buildingBlocks = 0;
   }
 
-  applyFate() { 
+  update() { 
     this.buildingBlocks += this.isAlive ? 1 : -1; 
     this.buildingBlocks = constrain(this.buildingBlocks, 0, maxBuildingHeight);
+    
     this.isAlive = this.willSurvive;
   }
   
@@ -190,22 +190,19 @@ class Board {
         let currentCell = this.getCell(x, y);
         let neighborCount = this.#getNeighborCount(x, y);
 
-        // Any live cell...
+        // Any live cell with two or three live neighbours survives.
         if (currentCell.isAlive) {
-          // 1. with fewer than two live neighbours dies, as if by underpopulation.
-          if (neighborCount < 2) currentCell.willSurvive = false;
-          // 2. with two or three live neighbours lives on to the next generation.
-          else if (neighborCount == 2 || neighborCount == 3) currentCell.willSurvive = true;
-          // 3. with more than three live neighbours dies, as if by overpopulation.
-          else if (neighborCount > 3) currentCell.willSurvive = false;
+          if (neighborCount == 2 || neighborCount == 3) currentCell.willSurvive = true;
+          // All other live cells die in the next generation. Similarly, all other dead cells stay dead.
+          else currentCell.willSurvive = false;
         }
-        // 4. Any dead cell with exactly three live neighbours becomes a live cell, as if by reproduction.
+        // Any dead cell with three live neighbours becomes a live cell.
         else if (neighborCount == 3) currentCell.willSurvive = true;
       }
     }
   }
 
-  updateToNextGeneration() { this.grid.forEach(cell => cell.applyFate()); }
+  updateToNextGeneration() { this.grid.forEach(cell => cell.update()); }
 
   #getNeighborCount(x, y) {
     let neighborCount = 0;
@@ -284,9 +281,9 @@ class CameraAnimator {
     if (this.#insideTimeWindow(startTimeSeconds, stopTimeSeconds)) {
       this.z = lerp(this.z, z, speed);
       this.y = lerp(this.y, y, speed);
-      this.cam.setPosition(this.x, this.y, this.z);
-      this.cam.lookAt(0, 0, 0);
     }
+    this.cam.setPosition(this.x, this.y, this.z);
+    this.cam.lookAt(0, 0, 0);
   }
 
   orbit(speed) {
@@ -298,4 +295,25 @@ class CameraAnimator {
     return secondsInSimulation > startTimeSeconds && secondsInSimulation < stopTimeSeconds;
   }
 }
+
+// class Clock {
+//   static milliseconds = 0;
+//   static seconds = 0;
+
+//   static tickSpeed = 1;
+//   static 
+
+//   start() {
+//     setInterval()
+//   }
+
+//   tick() {
+//     this.milliseconds += deltaTime;
+//     this.seconds = this.milliseconds / 1000;
+//   }
+
+//   seconds() {
+//     return milliseconds / 1000;
+//   }
+// }
 
