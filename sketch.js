@@ -1,13 +1,15 @@
-let cellSize = 20;
+let cellSize = 15;
 
 let cameraAnimator;
 let board;
 let terrainGenerator;
 
-let secondsInSimulation = 0;
-let simulationHasStarted = false;
+let currentTick = 0;
 
+let tickIntervalSeconds = 0.25;
+let maxTerrainHeight = 6;
 let maxBuildingHeight = 15;
+let blockAnimationSpeed = 0.3;
 
 let backgroundColor = 0;
 let gridColor = 255;
@@ -19,24 +21,23 @@ function windowResized() {
 function setup() {
   createCanvas(windowWidth, windowHeight, WEBGL);
   frameRate(24);
-
-  setupBoard();
-
-  cameraAnimator = new CameraAnimator(createCamera());
-  ortho();
-
+  
   stroke(gridColor);
+
+  setupBoard(); // initialize board
+  Clock.tickIntervalSeconds = tickIntervalSeconds; // time interval between each board update
+
+  cameraAnimator = new CameraAnimator(createCamera()); // create camera object
 }
 
 function setupBoard() {
   let columns, rows;
-
   let shorterScreenDimension = width > height ? height : width;
   columns = rows = floor(shorterScreenDimension / cellSize);
 
   board = new Board(columns, rows);
 
-  terrainGenerator = new TerrainGenerator(board, 5, 0.1, 10, 0.5);
+  terrainGenerator = new TerrainGenerator(board, maxTerrainHeight, 0.1, 6, 0.2);
   terrainGenerator.constructLevel(1);
 
   board.randomize();
@@ -44,45 +45,38 @@ function setupBoard() {
 
 function draw() {
   background(backgroundColor);
-  
-  if (simulationHasStarted) {
-    
-    secondsInSimulation += deltaTime / 1000;
 
-    cameraAnimator.tiltBack(0, 3, height, height * 2, 0.03);
+  if (Clock.isTicking) {
+    cameraAnimator.tiltBack(0, 3, height * 0.7, height * 1.5, 0.03);
     cameraAnimator.orbit(0.005);
 
-    if (secondsInSimulation < 5) {
-      terrainGenerator.constructLevel(floor(secondsInSimulation) + 1);
+    // fire once every tick
+    if (Clock.tickCount > currentTick) {
+      if (Clock.seconds < 4) {
+        terrainGenerator.constructLevel(currentTick + 1);
+      }
+      else {
+        board.determineNextGeneration();
+        board.updateToNextGeneration();
+      }
+      currentTick++;
     }
-    else {
-      board.determineNextGeneration();
-      board.updateToNextGeneration(); 
-    }
+    Clock.update();
   }
-
-  board.display();
+  board.draw();
 }
 
 function keyPressed() { 
-  // drawing controls
-  if (!simulationHasStarted) {
-    if (keyCode == 32) { // Spacebar to start simulation
-      perspective();
-      simulationHasStarted = true;
-    }
-    else if (keyCode == 82) { // R to randomize
-      board.randomize();
-    }
-    else if (keyCode == 67) { // C to clear
-      board.clear();
-    }
+  if (!Clock.isTicking) { // Edit mode controls
+    if (keyCode == 32) {  Clock.startTicking(); } // Spacebar to start simulation
+    else if (keyCode == 82) { board.randomize(); } // R to randomize board in edit mode
+    else if (keyCode == 67) { board.clear(); } // C to clear board in edit mode
   }
 }
 
-function mousePressed() { !simulationHasStarted && BoardInput.mousePressed(); }
-function mouseDragged() { !simulationHasStarted && BoardInput.mouseDragged(); }
-function mouseReleased() { !simulationHasStarted && BoardInput.mouseReleased(); }
+function mousePressed() { !Clock.isTicking && BoardInput.mousePressed(); }
+function mouseDragged() { !Clock.isTicking && BoardInput.mouseDragged(); }
+function mouseReleased() { !Clock.isTicking && BoardInput.mouseReleased(); }
 
 class TerrainGenerator {
   constructor(board, maxHeight, noiseScale, octaves, octaveFalloffFactor) {
@@ -96,83 +90,144 @@ class TerrainGenerator {
   }
 
   constructLevel(level) {
-    for (let x = 0; x < this.board.columns; x++) {
-      for (let y = 0; y < this.board.rows; y++) {
+    for (let x = 1; x < this.board.columns - 1; x++) {
+      for (let y = 1; y < this.board.rows - 1; y++) {
 
-        if (!this.board.isCellOnEdge(x, y)) {
-          let noiseValue = noise(x * this.noiseScale, y * this.noiseScale);
-          let terrainHeight = 1 + floor(noiseValue * this.maxHeight);
+        let noiseValue = noise(x * this.noiseScale, y * this.noiseScale);
+        let terrainHeight = ceil(noiseValue * this.maxHeight);
+        let blockColumn = this.board.getCell(x, y).blockColumn;
 
-          this.board.getCell(x, y).terrainBlocks = constrain(terrainHeight, 1, level);
-        }
+        blockColumn.setTerrainHeight(terrainHeight <= level ? terrainHeight : level);
       }
     }
   }
 }
 
 class Cell {
-  constructor() {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+
     this.isAlive = false;
     this.willSurvive = false;
 
-    this.terrainBlocks = 0;
-    this.buildingBlocks = 0;
+    this.blockColumn = new BlockColumn();
   }
 
   update() { 
-    this.buildingBlocks += this.isAlive ? 1 : -1; 
-    this.buildingBlocks = constrain(this.buildingBlocks, 0, maxBuildingHeight);
-    
+    this.isAlive ? this.blockColumn.rise() : this.blockColumn.fall();
     this.isAlive = this.willSurvive;
   }
   
-  draw(x, y) {
+  draw() {
     push();
-    if (this.isAlive) fill(gridColor);
-    else fill(backgroundColor);
 
-    translate(x * cellSize + cellSize / 2, y * cellSize + cellSize / 2);
-    this.drawTerrain();
-    this.drawBuildings();
+    fill(this.isAlive ? backgroundColor : gridColor);
+    translate(this.x * cellSize, this.y * cellSize);
+
+    this.blockColumn.draw();
 
     pop();
   }
+}
 
-  drawTerrain() {
-    if (simulationHasStarted) fill(backgroundColor);
-    for(let z = 0; z < this.terrainBlocks; z++) {
-      translate(0, 0, cellSize)
+class BlockColumn {
+  constructor() {
+    this.terrainHeight = 0;
+    this.buildingHeight = 0;
+    // animation variables
+    this.terrainZ = 0; // local z position of the top terrain block
+    this.buildingZ = 0; // local z position of the top building block
+    this.isFalling = false;
+
+  }
+
+  rise() { 
+    this.isFalling = false;
+    if (this.buildingHeight < maxBuildingHeight) {
+      this.buildingHeight++; 
+      this.buildingZ = 0;
+    }
+  }
+
+  fall() { 
+    if (this.buildingHeight > 0) {
+      if (this.isFalling) this.buildingHeight--;
+      else this.isFalling = true;
+      this.buildingZ = cellSize;
+      // this.buildingHeight--; 
+      // this.terrainHeight++;
+    }
+  }
+  
+  setTerrainHeight(terrainHeight) {
+    if (this.terrainHeight != terrainHeight) {
+      this.terrainHeight = terrainHeight;
+      this.terrainZ = 0; // reset animation
+    }
+  }
+
+  draw() {
+    if (this.terrainHeight) this.#drawTerrain();
+    if (this.buildingHeight) this.#drawBuilding();
+  }
+
+  #drawTerrain() {
+    if (Clock.isTicking) fill(backgroundColor);
+
+    for(let z = 0; z < this.terrainHeight - 1; z++) {
+      translate(0, 0, cellSize);
       box(cellSize);
     }
+
+    // animate top terrain block
+    this.terrainZ = lerp(this.terrainZ, cellSize, blockAnimationSpeed);
+    translate(0, 0, this.terrainZ);
+    box(cellSize);
   }
 
-  drawBuildings() {
-    if (simulationHasStarted) {
-      fill(gridColor);
-      stroke(backgroundColor);
-      for (let z = 0; z < this.buildingBlocks; z++) {
-        translate(0, 0, cellSize);
-        box(cellSize);
-      }
+  #drawBuilding() {
+    fill(gridColor);
+    stroke(backgroundColor);
+
+    for(let z = 0; z < this.buildingHeight - 1; z++) {
+      translate(0, 0, cellSize);
+      box(cellSize);
     }
-  }
 
+    // animate top building block
+    let targetZ = this.isFalling ? 0 : cellSize;
+    this.buildingZ = lerp(this.buildingZ, targetZ, blockAnimationSpeed);
+    translate(0, 0, this.buildingZ);
+    box(cellSize);
+  }
+  
 }
 
 class Board {
   constructor(columns, rows) {
     this.columns = columns;
     this.rows = rows;
-    this.grid = Array(columns * rows).fill().map(() => new Cell());
-    this.pixelLength = this.columns * cellSize;
+    this.lengthPixels = this.columns * cellSize;
+
+    this.grid = Array(columns * rows);
+    this.#populateGrid();
   }
 
-  // assign random number of cells to be alive
-  randomize() {
+  #populateGrid() {
     for (let x = 0; x < this.columns; x++) {
       for (let y = 0; y < this.rows; y++) {
-        // cells on the edge of the board are ignored
-        if (!this.isCellOnEdge(x, y)) this.getCell(x, y).isAlive = floor(random(2));
+        this.grid[(y * this.columns) + x] = new Cell(x, y);
+      }
+    }
+  }
+
+  // assign random number of cells to be alive, 
+  // cells on the edge of the board are ignored
+  randomize() {
+    for (let x = 1; x < this.columns - 1; x++) {
+      for (let y = 1; y < this.rows - 1; y++) {
+        this.getCell(x, y).isAlive = floor(random(2));
       }
     }
   }
@@ -181,14 +236,15 @@ class Board {
 
   getCell(x, y) { return this.grid[(y * this.columns) + x] }
 
-  isCellOnEdge(x, y) { return x <= 0 || y <= 0 || x >= this.columns - 1 || y >= this.rows - 1; }
+  // returns true if the cell is on the board and not an edge cell
+  isCellValid(x, y) { return !(x <= 0 || y <= 0 || x >= this.columns - 1 || y >= this.rows - 1); }
 
   determineNextGeneration() {
     for (let x = 1; x < this.columns - 1; x++) {
       for (let y = 1; y < this.rows - 1; y++) {
 
         let currentCell = this.getCell(x, y);
-        let neighborCount = this.#getNeighborCount(x, y);
+        let neighborCount = this.#getNeighborCount(currentCell);
 
         // Any live cell with two or three live neighbours survives.
         if (currentCell.isAlive) {
@@ -204,26 +260,32 @@ class Board {
 
   updateToNextGeneration() { this.grid.forEach(cell => cell.update()); }
 
-  #getNeighborCount(x, y) {
+  #getNeighborCount(cell) {
     let neighborCount = 0;
+
     for (let i = -1; i <= 1; i++) {
       for (let j = -1; j <= 1; j++) {
-        neighborCount += this.getCell(x + i, y + j).isAlive;
+        neighborCount += this.getCell(cell.x + i, cell.y + j).isAlive;
       }
     }
     // subtract state of self from neighbor count to avoid double counting
-    return neighborCount - this.getCell(x, y).isAlive;
+    return neighborCount - cell.isAlive;
   }
 
-  display() {
+  draw() {
     push();
-    translate(-this.pixelLength / 2 , -this.pixelLength / 2);
-    for (let x = 0; x < this.columns; x++) {
-      for (let y = 0; y < this.rows; y++) {
-        // display all cells except for the inactive ones on the edge
-        if (!this.isCellOnEdge(x, y)) this.getCell(x, y).draw(x, y);
+
+    let cellCenterOffset = cellSize / 2;
+    let halfBoardLength = this.lengthPixels / 2;
+    // centers the board 
+    translate(-halfBoardLength + cellCenterOffset, -halfBoardLength + cellCenterOffset, -cellSize);
+    
+    for (let x = 1; x < this.columns - 1; x++) {
+      for (let y = 1; y < this.rows - 1; y++) {
+        this.getCell(x, y).draw();
       }
     }
+
     pop();
   }
 }
@@ -257,13 +319,13 @@ class BoardInput {
     let mouseX2D = mouseX - width / 2;
     let mouseY2D = mouseY - height / 2;
 
-    let centerOffset = board.pixelLength / 2;
+    let centerOffset = board.lengthPixels / 2;
 
     let cellX = floor((mouseX2D + centerOffset) / cellSize);
     let cellY = floor((mouseY2D + centerOffset) / cellSize);
 
     // return the cell if it's on the board, null otherwise
-    return !board.isCellOnEdge(cellX, cellY) ? board.getCell(cellX, cellY) : null;
+    return board.isCellValid(cellX, cellY) ? board.getCell(cellX, cellY) : null;
   }
 
 }
@@ -292,28 +354,25 @@ class CameraAnimator {
   }
 
   #insideTimeWindow(startTimeSeconds, stopTimeSeconds) {
-    return secondsInSimulation > startTimeSeconds && secondsInSimulation < stopTimeSeconds;
+    return Clock.seconds > startTimeSeconds && Clock.seconds < stopTimeSeconds;
   }
 }
 
-// class Clock {
-//   static milliseconds = 0;
-//   static seconds = 0;
+class Clock {
+  static seconds = 0;
+  
+  static tickIntervalSeconds = 1;
+  static tickCount = 0;
+  static isTicking = false;
+  static tickerID;
 
-//   static tickSpeed = 1;
-//   static 
+  static startTicking() {
+    this.tickerID = setInterval(() => { this.tickCount++ }, this.tickIntervalSeconds * 1000);
+    this.isTicking = true;
+  }
 
-//   start() {
-//     setInterval()
-//   }
+  static stopTicking() { clearInterval(this.tickerID); this.isTicking = false; }
 
-//   tick() {
-//     this.milliseconds += deltaTime;
-//     this.seconds = this.milliseconds / 1000;
-//   }
-
-//   seconds() {
-//     return milliseconds / 1000;
-//   }
-// }
+  static update() { this.seconds += deltaTime / 1000; console.log(this.seconds);}
+}
 
