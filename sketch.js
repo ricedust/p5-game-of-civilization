@@ -1,13 +1,11 @@
-let cellSize = 15;
+let cellSize = 30;
 
 let cameraAnimator;
 let board;
 let terrainGenerator;
 
-let currentTick = 0;
-
-let tickIntervalSeconds = 0.25;
-let maxTerrainHeight = 6;
+let tickIntervalSeconds = 0.5;
+let maxTerrainHeight = 10;
 let maxBuildingHeight = 15;
 let blockAnimationSpeed = 0.3;
 
@@ -20,7 +18,6 @@ function windowResized() {
 
 function setup() {
   createCanvas(windowWidth, windowHeight, WEBGL);
-  frameRate(24);
   
   stroke(gridColor);
 
@@ -47,22 +44,26 @@ function draw() {
   background(backgroundColor);
 
   if (Clock.isTicking) {
-    cameraAnimator.tiltBack(0, 3, height * 0.7, height * 1.5, 0.03);
+    cameraAnimator.tiltBack(height * 0.7, height * 1.5, 0.03);
     cameraAnimator.orbit(0.005);
 
     // fire once every tick
-    if (Clock.tickCount > currentTick) {
-      if (Clock.seconds < 4) {
-        terrainGenerator.constructLevel(currentTick + 1);
+    if (Clock.tickCount > Clock.currentTick) {
+
+      if (Clock.seconds < 5) {
+        terrainGenerator.constructLevel(Clock.currentTick + 1);
       }
       else {
         board.determineNextGeneration();
         board.updateToNextGeneration();
       }
-      currentTick++;
+      Clock.currentTick++;
     }
+    
     Clock.update();
-  }
+  } 
+  else cameraAnimator.reset(0.05);
+
   board.draw();
 }
 
@@ -71,6 +72,9 @@ function keyPressed() {
     if (keyCode == 32) {  Clock.startTicking(); } // Spacebar to start simulation
     else if (keyCode == 82) { board.randomize(); } // R to randomize board in edit mode
     else if (keyCode == 67) { board.clear(); } // C to clear board in edit mode
+  }
+  else {
+    if (keyCode == 32) { Clock.reset(); setupBoard(); } // Spacebar to stop simulation
   }
 }
 
@@ -87,31 +91,33 @@ class TerrainGenerator {
     this.octaveFalloffFactor = octaveFalloffFactor;
     
     noiseDetail(this.octaves, this.octaveFalloffFactor);
+    noiseSeed(millis());
   }
 
   constructLevel(level) {
     for (let x = 1; x < this.board.columns - 1; x++) {
       for (let y = 1; y < this.board.rows - 1; y++) {
-
-        let noiseValue = noise(x * this.noiseScale, y * this.noiseScale);
-        let terrainHeight = ceil(noiseValue * this.maxHeight);
+        
         let blockColumn = this.board.getCell(x, y).blockColumn;
+        let noiseValue = noise(x * this.noiseScale, y * this.noiseScale);
+        let terrainHeight = floor(noiseValue * this.maxHeight);
 
-        blockColumn.setTerrainHeight(terrainHeight <= level ? terrainHeight : level);
+        blockColumn.setTerrainHeight(constrain(terrainHeight, 1, level));
       }
     }
   }
 }
 
 class Cell {
-  constructor(x, y) {
+  constructor(x, y, isOnEdge) {
     this.x = x;
     this.y = y;
+    this.isOnEdge = isOnEdge;
 
     this.isAlive = false;
     this.willSurvive = false;
 
-    this.blockColumn = new BlockColumn();
+    this.blockColumn = new BlockColumn(isOnEdge);
   }
 
   update() { 
@@ -122,7 +128,7 @@ class Cell {
   draw() {
     push();
 
-    fill(this.isAlive ? backgroundColor : gridColor);
+    fill(this.isAlive ? gridColor : backgroundColor);
     translate(this.x * cellSize, this.y * cellSize);
 
     this.blockColumn.draw();
@@ -132,7 +138,7 @@ class Cell {
 }
 
 class BlockColumn {
-  constructor() {
+  constructor(isOnEdge) {
     this.terrainHeight = 0;
     this.buildingHeight = 0;
     // animation variables
@@ -140,6 +146,7 @@ class BlockColumn {
     this.buildingZ = 0; // local z position of the top building block
     this.isFalling = false;
 
+    this.isOnEdge = isOnEdge;
   }
 
   rise() { 
@@ -177,7 +184,7 @@ class BlockColumn {
 
     for(let z = 0; z < this.terrainHeight - 1; z++) {
       translate(0, 0, cellSize);
-      box(cellSize);
+      if (this.isOnEdge) box(cellSize);
     }
 
     // animate top terrain block
@@ -217,7 +224,8 @@ class Board {
   #populateGrid() {
     for (let x = 0; x < this.columns; x++) {
       for (let y = 0; y < this.rows; y++) {
-        this.grid[(y * this.columns) + x] = new Cell(x, y);
+        let isCellOnEdge = x == 1 || y == 1 || x == this.columns - 2 || y == this.rows - 2;
+        this.grid[(y * this.columns) + x] = new Cell(x, y, isCellOnEdge);
       }
     }
   }
@@ -339,40 +347,52 @@ class CameraAnimator {
     this.zRotation = 0;
   }
 
-  tiltBack(startTimeSeconds, stopTimeSeconds, z, y, speed) {
-    if (this.#insideTimeWindow(startTimeSeconds, stopTimeSeconds)) {
-      this.z = lerp(this.z, z, speed);
-      this.y = lerp(this.y, y, speed);
-    }
+  tiltBack(z, y, speed) {
+    this.z = lerp(this.z, z, speed);
+    this.y = lerp(this.y, y, speed);
     this.cam.setPosition(this.x, this.y, this.z);
     this.cam.lookAt(0, 0, 0);
   }
 
   orbit(speed) {
-    this.zRotation += speed;
+    this.zRotation = (this.zRotation + speed) % TWO_PI;
     rotateZ(this.zRotation);
   }
 
-  #insideTimeWindow(startTimeSeconds, stopTimeSeconds) {
-    return Clock.seconds > startTimeSeconds && Clock.seconds < stopTimeSeconds;
+  reset(speed) {
+    this.z = lerp(this.z, (height/2) / tan(PI/6), speed);
+    this.y = lerp(this.y, 0, speed);
+    this.zRotation = lerp(this.zRotation, 0, speed);
+    
+    this.cam.setPosition(this.x, this.y, this.z);
+    this.cam.lookAt(0, 0, 0);
+    rotateZ(this.zRotation);
   }
 }
 
 class Clock {
-  static seconds = 0;
-  
   static tickIntervalSeconds = 1;
+  static tickerID;
+  
+  static seconds = 0;
+  static currentTick = 0;
   static tickCount = 0;
   static isTicking = false;
-  static tickerID;
 
   static startTicking() {
     this.tickerID = setInterval(() => { this.tickCount++ }, this.tickIntervalSeconds * 1000);
     this.isTicking = true;
   }
 
-  static stopTicking() { clearInterval(this.tickerID); this.isTicking = false; }
+  static reset() { 
+    clearInterval(this.tickerID);
 
-  static update() { this.seconds += deltaTime / 1000; console.log(this.seconds);}
+    this.seconds = 0;
+    this.currentTick = 0;
+    this.tickCount = 0;
+    this.isTicking = false; 
+  }
+
+  static update() { this.seconds += deltaTime / 1000;}
 }
 
