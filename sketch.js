@@ -62,7 +62,7 @@ function draw() {
     
     Clock.update();
   } 
-  else cameraAnimator.reset(0.05);
+  else cameraAnimator.reset(0.08);
 
   board.draw();
 }
