@@ -6,7 +6,7 @@ Conway's Game of Life but cells grow and shrink vertically over time on procedur
 
 ## How To Run
 
-### [Click here to play the simulation in the browser](ricedust.com/p5-game-of-civilization)
+### [Click here to play the simulation in the browser.](ricedust.com/p5-game-of-civilization)
 
 Drag or click with the mouse to paint or erase cells. This will be the starting pattern for the game. When you are ready, press spacebar to start the game. Press spacebar again to end the game and return to edit mode.
 
